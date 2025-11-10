@@ -1,60 +1,7 @@
 const request = require('supertest');
 const nock = require('nock');
-const express = require('express');
-const path = require('path');
+const { app } = require('../app');
 const { sampleHtmlWithYale } = require('./test-utils');
-
-// Import app but don't let it listen on a port (we'll use supertest for that)
-// Create a test app with the same route handlers
-const testApp = express();
-testApp.use(express.json());
-testApp.use(express.urlencoded({ extended: true }));
-
-// Mock the app's routes for testing
-testApp.post('/fetch', async (req, res) => {
-  try {
-    const { url } = req.body;
-    
-    if (!url) {
-      return res.status(400).json({ error: 'URL is required' });
-    }
-
-    // For test purposes, we're using the mocked response from nock
-    // The actual HTTP request is intercepted by nock
-    const response = await require('axios').get(url);
-    const html = response.data;
-    
-    // Use cheerio to parse HTML and selectively replace text content, not URLs
-    const $ = require('cheerio').load(html);
-    
-    // Process text nodes in the body
-    $('body *').contents().filter(function() {
-      return this.nodeType === 3; // Text nodes only
-    }).each(function() {
-      // Replace text content but not in URLs or attributes
-      const text = $(this).text();
-      const newText = text.replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-      if (text !== newText) {
-        $(this).replaceWith(newText);
-      }
-    });
-    
-    // Process title separately
-    const title = $('title').text().replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-    $('title').text(title);
-    
-    return res.json({ 
-      success: true, 
-      content: $.html(),
-      title: title,
-      originalUrl: url
-    });
-  } catch (error) {
-    return res.status(500).json({ 
-      error: `Failed to fetch content: ${error.message}` 
-    });
-  }
-});
 
 describe('API Endpoints', () => {
   beforeAll(() => {
@@ -75,10 +22,60 @@ describe('API Endpoints', () => {
     nock.cleanAll();
   });
 
+  test('GET / should serve the index.html file', async () => {
+    const response = await request(app)
+      .get('/')
+      .expect(200)
+      .expect('Content-Type', /html/);
+
+    expect(response.text).toContain('<!DOCTYPE html>');
+    expect(response.text).toContain('html');
+    expect(response.text).toContain('Faleproxy');
+    // Verify the file was actually sent by checking for specific content
+    expect(response.text).toContain('url-form');
+    expect(response.text).toContain('url-input');
+  });
+
+  test('GET / should call sendFile with correct path', async () => {
+    const path = require('path');
+    const fs = require('fs');
+    
+    // Verify the file exists
+    const filePath = path.join(__dirname, '../public/index.html');
+    expect(fs.existsSync(filePath)).toBe(true);
+    
+    // Make request and verify it serves the file
+    const response = await request(app)
+      .get('/')
+      .expect(200);
+    
+    // Read the actual file to compare
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    expect(response.text).toBe(fileContent);
+  });
+
   test('POST /fetch should return 400 if URL is missing', async () => {
-    const response = await request(testApp)
+    const response = await request(app)
       .post('/fetch')
       .send({});
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body.error).toBe('URL is required');
+  });
+
+  test('POST /fetch should return 400 if URL is empty string', async () => {
+    const response = await request(app)
+      .post('/fetch')
+      .send({ url: '' });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body.error).toBe('URL is required');
+  });
+
+  test('POST /fetch should return 400 if URL is null', async () => {
+    const response = await request(app)
+      .post('/fetch')
+      .send({ url: null });
 
     expect(response.statusCode).toBe(400);
     expect(response.body.error).toBe('URL is required');
@@ -90,7 +87,7 @@ describe('API Endpoints', () => {
       .get('/')
       .reply(200, sampleHtmlWithYale);
 
-    const response = await request(testApp)
+    const response = await request(app)
       .post('/fetch')
       .send({ url: 'https://example.com/' });
 
@@ -100,6 +97,7 @@ describe('API Endpoints', () => {
     expect(response.body.content).toContain('Welcome to Fale University');
     expect(response.body.content).toContain('https://www.yale.edu/about');  // URL should be unchanged
     expect(response.body.content).toContain('>About Fale<');  // Link text should be changed
+    expect(response.body.originalUrl).toBe('https://example.com/');
   });
 
   test('POST /fetch should handle errors from external sites', async () => {
@@ -108,10 +106,26 @@ describe('API Endpoints', () => {
       .get('/')
       .replyWithError('Connection refused');
 
-    const response = await request(testApp)
+    const response = await request(app)
       .post('/fetch')
       .send({ url: 'https://error-site.com/' });
 
+    expect(response.statusCode).toBe(500);
+    expect(response.body.error).toContain('Failed to fetch content');
+  });
+
+  test('POST /fetch should handle HTTP errors', async () => {
+    // Mock a 404 error
+    nock('https://notfound.com')
+      .get('/')
+      .reply(404, 'Not Found');
+
+    const response = await request(app)
+      .post('/fetch')
+      .send({ url: 'https://notfound.com/' });
+
+    // The app should still try to process it, but it might fail
+    // Let's see what happens - axios will throw an error for 404
     expect(response.statusCode).toBe(500);
     expect(response.body.error).toContain('Failed to fetch content');
   });
