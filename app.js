@@ -71,7 +71,6 @@ app.post("/fetch", async (req, res) => {
       originalUrl: url,
     });
   } catch (error) {
-    console.error("Error fetching URL:", error.message);
     return res.status(500).json({
       error: `Failed to fetch content: ${error.message}`,
     });
@@ -85,7 +84,10 @@ function startServer() {
   });
 }
 
-module.exports = { replaceYaleWithFale, app, startServer };
+module.exports = app;
+module.exports.app = app;
+module.exports.replaceYaleWithFale = replaceYaleWithFale;
+module.exports.startServer = startServer;
 
 // Start the server only if this file is run directly (not imported)
 if (require.main === module) {
