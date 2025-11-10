@@ -5,6 +5,7 @@ const { promisify } = require("util");
 const execAsync = promisify(exec);
 const { sampleHtmlWithYale } = require("./test-utils");
 const http = require("http");
+const fs = require("fs").promises;
 
 // Set a different port for testing to avoid conflict with the main app
 const TEST_PORT = 3099;
@@ -26,10 +27,12 @@ describe("Integration Tests", () => {
     });
 
     // Create a temporary test app file
-    await execAsync("cp app.js app.test.js");
-    await execAsync(
-      `sed -i '' 's/const PORT = 3001/const PORT = ${TEST_PORT}/' app.test.js`
+    const appContent = await fs.readFile("app.js", "utf8");
+    const modifiedAppContent = appContent.replace(
+      /const PORT = 3001/,
+      `const PORT = ${TEST_PORT}`
     );
+    await fs.writeFile("app.test.js", modifiedAppContent, "utf8");
 
     // Start the test server
     const server = require("child_process").spawn("node", ["app.test.js"], {
@@ -54,7 +57,7 @@ describe("Integration Tests", () => {
       // Ignore errors if process is already dead
     }
     try {
-      await execAsync("rm -f app.test.js");
+      await fs.unlink("app.test.js");
     } catch (error) {
       // Ignore errors if file doesn't exist
     }
